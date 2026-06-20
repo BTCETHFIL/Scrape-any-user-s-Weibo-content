@@ -409,7 +409,7 @@ class WeiboCrawlerGUI:
         self._toggle_range()
         # ── 手动链接保存 ──
         manual_frame = Frame(self.root); manual_frame.pack(fill=X, padx=8, pady=(6, 2))
-        Label(manual_frame, text="🔗 手动链接 (每行一条 · 上限20):", font=("", 9)).pack(anchor="w")
+        Label(manual_frame, text="🔗 手动链接 (每行一条 · 上限100 · 支持导入文件分批):", font=("", 9)).pack(anchor="w")
         self._manual_text = Text(manual_frame, height=4, font=("Consolas", 9),
                                   wrap=WORD, fg="gray")
         self._manual_text.insert("1.0", "粘贴微博链接，每行一条...\n如 https://weibo.com/xxx/xxx")
@@ -420,7 +420,10 @@ class WeiboCrawlerGUI:
         self._manual_btn = Button(btn_row2, text="📝 批量保存为 MD", command=self._save_manual_weibos,
                                    bg="#607D8B", fg="white", width=16)
         self._manual_btn.pack(side=LEFT)
-        ToolTip(self._manual_btn, "将上方粘贴的微博链接逐条抓取\n保存为 Markdown 文件\n支持 weibo.com / m.weibo.cn 链接\n最多同时处理 20 条")
+        self._import_btn = Button(btn_row2, text="📂 导入文件", command=self._import_link_file,
+                                   bg="#607D8B", fg="white", width=12)
+        self._import_btn.pack(side=RIGHT)
+        ToolTip(self._manual_btn, "将上方粘贴的微博链接逐条抓取\n保存为 Markdown 文件\n支持 weibo.com / m.weibo.cn 链接\n最多同时处理 100 条")
         btn = Frame(self.root); btn.pack(fill=X, padx=8, pady=2)
         self.start_btn = Button(btn, text="开始抓取", command=self._start, bg="#4CAF50", fg="white", width=12)
         self.start_btn.pack(side=LEFT, padx=4)
@@ -636,65 +639,149 @@ class WeiboCrawlerGUI:
             self._manual_text.insert("1.0", "粘贴微博链接，每行一条...\n如 https://weibo.com/xxx/xxx")
             self._manual_text.config(fg="gray")
 
-    MAX_MANUAL_URLS = 20
+    MAX_MANUAL_URLS = 100
+    BATCH_SIZE = 100
 
-    def _save_manual_weibos(self, event=None):
-        """批量手动微博链接 → 保存为 MD"""
-        raw = self._manual_text.get("1.0", END).strip()
-        if not raw or raw.startswith("粘贴微博链接"):
-            messagebox.showwarning("提示", "请先粘贴微博链接")
+    def _import_link_file(self):
+        """导入链接文件（.txt / .csv），支持超大批次自动分批"""
+        fp = filedialog.askopenfilename(
+            title="选择链接文件",
+            filetypes=[("文本文件", "*.txt"), ("CSV 文件", "*.csv"), ("所有文件", "*.*")]
+        )
+        if not fp:
             return
 
-        urls = [u.strip() for u in raw.splitlines() if u.strip()]
-        urls = [u for u in urls if 'weibo.com' in u or 'weibo.cn' in u]
+        try:
+            with open(fp, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            with open(fp, 'r', encoding='gbk') as f:
+                content = f.read()
+
+        # 提取微博链接
+        urls = re.findall(r'https?://[^\s]*(?:weibo\.com|weibo\.cn)[^\s]*', content)
+        # 去重保持顺序
+        seen = set()
+        urls = [u for u in urls if not (u in seen or seen.add(u))]
 
         if not urls:
-            messagebox.showwarning("提示", "请粘贴微博链接（weibo.com 或 m.weibo.cn）")
+            messagebox.showwarning("提示", f"文件中未找到微博链接\n文件: {Path(fp).name}")
             return
 
-        if len(urls) > self.MAX_MANUAL_URLS:
+        self._imported_urls = urls
+
+        batches = (len(urls) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+        if len(urls) <= self.MAX_MANUAL_URLS:
+            self._manual_text.delete("1.0", END)
+            self._manual_text.insert("1.0", "\n".join(urls))
+            self._manual_text.config(fg="black")
+            msg = f"已导入 {len(urls)} 条链接"
+        else:
+            self._manual_text.delete("1.0", END)
+            self._manual_text.insert(
+                "1.0",
+                f"已导入 {len(urls)} 条链接（将自动分 {batches} 批处理，每批 {self.BATCH_SIZE} 条）\n"
+                f"来源: {Path(fp).name}"
+            )
+            self._manual_text.config(fg="black")
+            msg = f"已导入 {len(urls)} 条链接（分 {batches} 批）"
+        self._append_log(msg + "\n")
+
+    def _save_manual_weibos(self, event=None):
+        """批量手动微博链接 → 保存为 MD（含导入文件分批支持）"""
+        # 优先使用导入的链接列表
+        if getattr(self, '_imported_urls', None):
+            urls = self._imported_urls
+        else:
+            raw = self._manual_text.get("1.0", END).strip()
+            if not raw or raw.startswith("粘贴微博链接") or raw.startswith("已导入"):
+                messagebox.showwarning("提示", "请先粘贴微博链接或导入链接文件")
+                return
+
+            urls = [u.strip() for u in raw.splitlines() if u.strip()]
+            urls = [u for u in urls if 'weibo.com' in u or 'weibo.cn' in u]
+
+        if not urls:
+            messagebox.showwarning("提示", "请粘贴微博链接（weibo.com 或 m.weibo.cn）或导入链接文件")
+            return
+
+        # 手动粘贴时限制上限 100
+        if not getattr(self, '_imported_urls', None) and len(urls) > self.MAX_MANUAL_URLS:
             urls = urls[:self.MAX_MANUAL_URLS]
             self._manual_text.delete("1.0", END)
             self._manual_text.insert("1.0", "\n".join(urls))
+
+        # 超大批次确认
+        if len(urls) > self.BATCH_SIZE:
+            batches = (len(urls) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+            ok = messagebox.askyesno(
+                "分批处理确认",
+                f"共 {len(urls)} 条链接，超过单批上限（{self.BATCH_SIZE}条）。\n\n"
+                f"将自动分 {batches} 批处理，是否继续？"
+            )
+            if not ok:
+                return
 
         if self.controller.state in ("running", "paused"):
             messagebox.showwarning("提示", "已有爬取任务在运行中，请等待完成")
             return
 
         self._manual_btn.config(state=DISABLED, text=f"保存中 (0/{len(urls)})...")
+        self._import_btn.config(state=DISABLED)
         self._save_config()
 
         def worker():
             success = 0
             fail = 0
+            total = len(urls)
             try:
                 import weibo as wm
                 config = self.controller.config
                 wb = Weibo(config)
-                total = len(urls)
+                batch_count = (total + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+
                 self.root.after(0, lambda: self._append_log(f"\n🔗 批量保存 {total} 条微博链接\n"))
-                for i, url in enumerate(urls, 1):
-                    self.root.after(0, lambda c=i, t=total: self._manual_btn.config(
-                        state=DISABLED, text=f"保存中 ({c}/{t})..."))
-                    self.root.after(0, lambda u=url: self._append_log(f"  [{i}/{total}] {u[:80]}...\n"))
-                    result = wb.crawl_single_weibo_url(url)
-                    if result['success']:
-                        self.root.after(0, lambda p=result['md_path']: self._append_log(f"    ✅ {p}\n"))
-                        success += 1
-                    else:
-                        self.root.after(0, lambda e=result['error']: self._append_log(f"    ❌ {e}\n"))
-                        fail += 1
+                if batch_count > 1:
+                    self.root.after(0, lambda c=batch_count: self._append_log(
+                        f"📦 自动分批: 共 {c} 批，每批 {self.BATCH_SIZE} 条\n"))
+
+                for batch_idx in range(batch_count):
+                    start = batch_idx * self.BATCH_SIZE
+                    end = min(start + self.BATCH_SIZE, total)
+                    batch_urls = urls[start:end]
+
+                    if batch_count > 1:
+                        self.root.after(0, lambda bi=batch_idx+1, bc=batch_count, s=start+1, e=end:
+                            self._append_log(f"\n── 📦 批次 {bi}/{bc} ({s}-{e}) ──\n"))
+
+                    for i, url in enumerate(batch_urls):
+                        idx = start + i + 1
+                        self.root.after(0, lambda c=idx, t=total: self._manual_btn.config(
+                            state=DISABLED, text=f"保存中 ({c}/{t})..."))
+                        self.root.after(0, lambda u=url, ii=idx, tt=total:
+                            self._append_log(f"  [{ii}/{tt}] {u[:80]}...\n"))
+                        result = wb.crawl_single_weibo_url(url)
+                        if result['success']:
+                            self.root.after(0, lambda p=result['md_path']:
+                                self._append_log(f"    ✅ {p}\n"))
+                            success += 1
+                        else:
+                            self.root.after(0, lambda e=result['error']:
+                                self._append_log(f"    ❌ {e}\n"))
+                            fail += 1
             except Exception as e:
                 import traceback
                 self.root.after(0, lambda: self._append_log(f"保存异常: {e}\n{traceback.format_exc()}\n"))
             finally:
+                self._imported_urls = None  # 清除导入缓存
                 summary = f"✅ {success} 成功"
                 if fail:
                     summary += f" / ❌ {fail} 失败"
                 self.root.after(0, lambda s=summary: self._append_log(f"\n📊 批量保存完成: {s}\n"))
-                self.root.after(0, lambda s=summary, t=len(urls): messagebox.showinfo(
+                self.root.after(0, lambda s=summary, t=total: messagebox.showinfo(
                     "批量保存完成", f"批量保存 {t} 条完成:\n{s}"))
                 self.root.after(0, lambda: self._manual_btn.config(state=NORMAL, text="📝 批量保存为 MD"))
+                self.root.after(0, lambda: self._import_btn.config(state=NORMAL))
 
         threading.Thread(target=worker, daemon=True).start()
 
