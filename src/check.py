@@ -24,16 +24,12 @@ try:
 except:
     print("5. requests: MISSING!")
 
-print("6. sys.path:", sys.path[:3])
+# SCRIPT_DIR 现在指向 src/，项目根是上一级
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+print("7. PROJECT_DIR:", SCRIPT_DIR)
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "src"))
 
 try:
-    SCRIPT_DIR = os.path.split(os.path.realpath(__file__))[0]
-except:
-    SCRIPT_DIR = os.getcwd()
-print("7. SCRIPT_DIR:", SCRIPT_DIR)
-
-try:
-    sys.path.insert(0, SCRIPT_DIR)
     import const
     print("8. const import: OK, MODE =", const.MODE)
 except Exception as e:
@@ -47,6 +43,8 @@ except Exception as e:
     traceback.print_exc()
 
 try:
+    # gui.py 在项目根
+    sys.path.insert(0, SCRIPT_DIR)
     import gui
     print("10. gui import: OK")
 except Exception as e:

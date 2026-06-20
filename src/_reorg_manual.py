@@ -1,7 +1,7 @@
 """将 weibo_data/manual/ 下的扁平文件按 screen_name 归入子目录"""
 import os, re, shutil
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANUAL = os.path.join(BASE, "weibo_data", "manual")
 if not os.path.isdir(MANUAL):
     print(f"ERROR: {MANUAL} not found")

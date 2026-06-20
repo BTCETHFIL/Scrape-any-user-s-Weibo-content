@@ -9,6 +9,11 @@ SCRIPT_DIR = os.path.split(os.path.realpath(__file__))[0]
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+# 将 src/ 加入 sys.path，所有模块已移至 src/ 子目录
+_src_dir = os.path.join(SCRIPT_DIR, "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
 import const
 from weibo import Weibo, get_config as get_weibo_config, handle_config_renaming
 

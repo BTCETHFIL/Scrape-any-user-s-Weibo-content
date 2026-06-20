@@ -34,12 +34,14 @@ warnings.filterwarnings("ignore")
 
 # 如果日志文件夹不存在，则创建
 SCRIPT_DIR_WB = os.path.split(os.path.realpath(__file__))[0]
-log_dir = os.path.join(SCRIPT_DIR_WB, "log")
+# SCRIPT_DIR_WB 现在指向 src/，项目根是上一级
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR_WB)
+log_dir = os.path.join(PROJECT_DIR, "log")
 if not os.path.isdir(log_dir):
     os.makedirs(log_dir)
-logging_path = os.path.join(SCRIPT_DIR_WB, "logging.conf")
+logging_path = os.path.join(PROJECT_DIR, "logging.conf")
 _old_cwd = os.getcwd()
-os.chdir(SCRIPT_DIR_WB)
+os.chdir(PROJECT_DIR)
 try:
     logging.config.fileConfig(logging_path)
 finally:
@@ -193,7 +195,7 @@ class Weibo(object):
         if not isinstance(user_id_list, list):
             if not os.path.isabs(user_id_list):
                 user_id_list = (
-                    os.path.split(os.path.realpath(__file__))[0] + os.sep + user_id_list
+                    PROJECT_DIR + os.sep + user_id_list
                 )
             self.user_config_file_path = user_id_list  # 用户配置文件路径
             user_config_list = self.get_user_config_list(user_id_list)
@@ -449,7 +451,7 @@ class Weibo(object):
         if not isinstance(user_id_list, list):
             if not os.path.isabs(user_id_list):
                 user_id_list = (
-                    os.path.split(os.path.realpath(__file__))[0] + os.sep + user_id_list
+                    PROJECT_DIR + os.sep + user_id_list
                 )
             if not os.path.isfile(user_id_list):
                 logger.warning("不存在%s文件", user_id_list)
@@ -1397,7 +1399,7 @@ class Weibo(object):
             if self.user_id_as_folder_name:
                 dir_name = str(self.user_config["user_id"])
             file_dir = (
-                os.path.split(os.path.realpath(__file__))[0]
+                PROJECT_DIR
                 + os.sep
                 + self.output_directory
                 + os.sep
@@ -1915,7 +1917,7 @@ class Weibo(object):
             md_filename = f"单条_{safe_name}_{safe_date}_{wid_short}.md"
 
             # 输出到 weibo_data/manual/{screen_name}/ 子目录
-            file_dir = os.path.join(SCRIPT_DIR_WB, "weibo_data", "manual", safe_name)
+            file_dir = os.path.join(PROJECT_DIR, "weibo_data", "manual", safe_name)
             os.makedirs(file_dir, exist_ok=True)
             md_path = os.path.join(file_dir, md_filename)
             with open(md_path, 'w', encoding='utf-8') as f:
@@ -2136,11 +2138,11 @@ def handle_config_renaming(config, oldName, newName):
 
 def get_config():
     """获取配置文件信息"""
-    config_path = os.path.split(os.path.realpath(__file__))[0] + os.sep + "config.json"
+    config_path = PROJECT_DIR + os.sep + "config.json"
     if not os.path.isfile(config_path):
         logger.warning(
             "当前路径：%s 不存在配置文件config.json",
-            (os.path.split(os.path.realpath(__file__))[0] + os.sep),
+            (PROJECT_DIR + os.sep),
         )
         sys.exit()
     try:
