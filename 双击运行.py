@@ -554,6 +554,29 @@ class WeiboCrawlerGUI:
             uid, name = v[0], v[1]
             if messagebox.askyesno("选择性抓取", "仅抓取 {}({})？".format(name, uid)):
                 override = self.config.copy(); override["user_id_list"] = [uid]
+
+        # ── 关键词确认弹窗 ──
+        from weibo import _split_keywords
+        kf = self.config.get("keyword_filter", {})
+        kw_enabled = kf.get("enabled", False)
+        kw_str = kf.get("keyword", "").strip()
+        kws = _split_keywords(kw_str) if kw_enabled and kw_str else []
+        if kws:
+            filter_info = f"🔍 关键词筛选：{len(kws)}个 → {', '.join(kws[:8])}"
+            if len(kws) > 8:
+                filter_info += f" …(共{len(kws)}个)"
+        else:
+            filter_info = "⚠ 未启用关键词筛选，将抓取全部微博"
+        uid_list = override.get("user_id_list", self.config.get("user_id_list", [])) if override else self.config.get("user_id_list", [])
+        confirm_msg = (
+            f"确认开始爬取？\n\n"
+            f"👤 目标用户: {len(uid_list)}人\n"
+            f"{filter_info}"
+        )
+        if not messagebox.askyesno("确认爬取", confirm_msg, parent=self.root):
+            self._append_log("⚠ 用户取消爬取\n")
+            return
+
         self.log_text.delete(1.0, END)
         if self.controller.start_crawl(cb_progress=self._on_progress, override=override):
             self._update_button_states()
