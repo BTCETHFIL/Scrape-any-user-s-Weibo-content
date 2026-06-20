@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import copy, json, logging, logging.config, os, sys, threading, time, queue, re, sqlite3
+import json, logging, logging.config, os, sys, threading, time, queue, re, sqlite3
 from pathlib import Path
 from tkinter import Tk, Toplevel, Frame, LabelFrame, Label, Button, Entry, Text, Scrollbar, messagebox, StringVar, IntVar, BooleanVar, Listbox, filedialog, DISABLED, NORMAL, END, RIGHT, Y, BOTH, LEFT, X, TOP, BOTTOM, WORD, ttk, Spinbox, Checkbutton, EXTENDED, W
 
@@ -92,7 +92,7 @@ class CrawlerController:
         with open(cfg, 'w', encoding='utf-8') as f:
             json.dump(self.config, f, ensure_ascii=False, indent=4)
 
-    def start_crawl(self, cb_progress=None, cb_log=None, override=None):
+    def start_crawl(self, cb_progress=None, override=None):
         if self.thread and self.thread.is_alive(): return False
         self.stop_event.clear(); self.pause_event.set()
         self.captcha_event.clear(); self.captcha_waiting = False
@@ -190,7 +190,7 @@ class CrawlerController:
             if r and r[0] != "ok": logger.warning("数据库异常: %s", r[0])
         except: pass
 
-    def _update_index(self, wb, force=False):
+    def _update_index(self, wb):
         sn = (wb.user or {}).get("screen_name", "")
         if not sn: return
         od = self.config.get("output_directory", "output") if self.config else "output"
