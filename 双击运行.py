@@ -1220,16 +1220,17 @@ class WeiboCrawlerGUI:
             self._append_log(f"🔍 关键词已确认: {kw}\n")
 
     def _on_group_selected(self, event=None):
-        """选中分组时预览关键词（不自动填入）"""
+        """选中分组时自动填入关键词到输入框"""
         name = self._group_var.get()
         if not name or name == "（暂无分组）":
             return
         g = keyword_mgr.get_group(name)
         if g:
-            preview = ", ".join(g.keywords[:5])
-            if len(g.keywords) > 5:
-                preview += f" …(共{len(g.keywords)}个)"
-            self._append_log(f"📂 分组「{name}」: {preview}\n")
+            kw_str = ", ".join(g.keywords)
+            self.kw_var.set(kw_str)
+            self.kw_enabled_var.set(True)
+            self._toggle_keyword()
+            self._append_log(f"✅ 已应用分组「{name}」({len(g.keywords)}个关键词)\n")
 
     def _apply_group(self):
         """将选中分组的全部关键词填入关键词输入框"""
@@ -1316,8 +1317,13 @@ class WeiboCrawlerGUI:
             new_kws = _split_keywords(kw_text.get("1.0", END))
             keyword_mgr.update_group_keywords(g.name, new_kws)
             self._refresh_keyword_ui()
+            # 同步更新主窗口：填入关键词 + 选中分组
+            self.kw_var.set(", ".join(new_kws))
+            self.kw_enabled_var.set(True)
+            self._toggle_keyword()
+            self._group_var.set(g.name)
             self._append_log(f"✏ 已更新分组「{g.name}」({len(new_kws)}个关键词)\n")
-            messagebox.showinfo("完成", f"分组「{g.name}」已更新", parent=dialog); dialog.destroy()
+            messagebox.showinfo("完成", f"分组「{g.name}」已更新（已自动填入关键词输入框）", parent=dialog); dialog.destroy()
 
         def do_delete():
             sel = lb.curselection()
