@@ -54,6 +54,14 @@ class Weibo(object):
         """Weibo类初始化"""
         self.validate_config(config)
         self.only_crawl_original = config["only_crawl_original"]  # 取值范围为0、1,程序默认值为0,代表要爬取用户的全部微博,1代表只爬取用户的原创微博
+        # 关键词过滤配置
+        kw_filter = config.get("keyword_filter", {})
+        if isinstance(kw_filter, dict):
+            self.keyword_filter_enabled = kw_filter.get("enabled", False)
+            self.keyword = kw_filter.get("keyword", "").strip()
+        else:
+            self.keyword_filter_enabled = False
+            self.keyword = ""
         self.remove_html_tag = config[
             "remove_html_tag"
         ]  # 取值范围为0、1, 0代表不移除微博中的html tag, 1代表移除
@@ -1311,6 +1319,14 @@ class Weibo(object):
                                     return True
                             else:
                                 logger.debug(f"[日期通过] 微博ID={wb['id']}, 发布时间={created_at}, 起始时间={since_date}")
+                            # 关键词过滤（日期通过后，加入结果前）
+                            if self.keyword_filter_enabled and self.keyword:
+                                kw = self.keyword.lower()
+                                text_lower = wb.get('text', '').lower()
+                                topics_lower = wb.get('topics', '').lower()
+                                if kw not in text_lower and kw not in topics_lower:
+                                    logger.debug(f"[关键词过滤] 微博ID={wb['id']}, 不含关键词「{self.keyword}」, 已跳过")
+                                    continue
                             if (not self.only_crawl_original) or ("retweet" not in wb.keys()):
                                 self.weibo.append(wb)
                                 self.weibo_id_list.append(wb["id"])
@@ -1805,6 +1821,15 @@ class Weibo(object):
                 self.user_config = old_user_config
                 self.user = old_user
 
+            # 关键词过滤（手动链接）
+            if self.keyword_filter_enabled and self.keyword:
+                kw = self.keyword.lower()
+                text_lower = weibo.get('text', '').lower()
+                topics_lower = weibo.get('topics', '').lower()
+                if kw not in text_lower and kw not in topics_lower:
+                    return {'success': False, 'md_path': '',
+                            'error': f'微博内容不含关键词「{self.keyword}」'}
+
             # ── 构建 MD 内容 ──
             created_at = weibo.get('created_at', '')
             full_created_at = weibo.get('full_created_at', '')
@@ -1954,6 +1979,8 @@ class Weibo(object):
             if self.get_user_info() != 0:
                 return
             logger.info("准备搜集 {} 的微博".format(self.user["screen_name"]))
+            if self.keyword_filter_enabled and self.keyword:
+                logger.info(f"🔍 关键词过滤已启用: 「{self.keyword}」（匹配正文或话题标签）")
 
             # 防封禁：初始化爬取统计
             if self.anti_ban_enabled:

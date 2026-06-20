@@ -43,5 +43,10 @@
     },
     "write_time_in_exif": 0,
     "change_file_time": 0,
-    "mode": "append"
+    "mode": "append",
+    "write_mode": ["sqlite", "markdown"],
+    "keyword_filter": {
+        "enabled": false,
+        "keyword": ""
+    }
 }

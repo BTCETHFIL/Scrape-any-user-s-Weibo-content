@@ -395,6 +395,17 @@ class WeiboCrawlerGUI:
         self.all_range_var = BooleanVar(value=False)
         cb = Checkbutton(r3, text="全时段", variable=self.all_range_var, command=self._toggle_range)
         cb.pack(side=LEFT, padx=8)
+        # 关键词过滤
+        kw_filter = self.config.get("keyword_filter", {})
+        if not isinstance(kw_filter, dict):
+            kw_filter = {}
+        self.kw_enabled_var = BooleanVar(value=kw_filter.get("enabled", False))
+        cb_kw = Checkbutton(r3, text="🔍 关键词:", variable=self.kw_enabled_var, command=self._toggle_keyword)
+        cb_kw.pack(side=LEFT, padx=(20, 2))
+        self.kw_var = StringVar(value=kw_filter.get("keyword", ""))
+        self.kw_entry = Entry(r3, textvariable=self.kw_var, width=14, font=("", 9))
+        self.kw_entry.pack(side=LEFT, padx=2)
+        self._toggle_keyword()
         self._toggle_range()
         # ── 手动链接保存 ──
         manual_frame = Frame(self.root); manual_frame.pack(fill=X, padx=8, pady=(6, 2))
@@ -523,6 +534,12 @@ class WeiboCrawlerGUI:
             self.sd_var.set(self.config.get("since_date") or "2024-12-20")
             self.ed_var.set(self.config.get("end_date") or "")
 
+    def _toggle_keyword(self):
+        if self.kw_enabled_var.get():
+            self.kw_entry.config(state=NORMAL)
+        else:
+            self.kw_entry.config(state=DISABLED)
+
     def _save_config(self):
         self.config["mode"] = self.mode_var.get()
         self.config["page_weibo_count"] = self.ppc_var.get()
@@ -538,6 +555,10 @@ class WeiboCrawlerGUI:
         if not isinstance(ab, dict): ab = {}
         ab["enabled"] = self.anti_ban_var.get()
         self.config["anti_ban_config"] = ab
+        self.config["keyword_filter"] = {
+            "enabled": self.kw_enabled_var.get(),
+            "keyword": self.kw_var.get().strip(),
+        }
         # 只保留 sqlite + markdown，不生成 csv/json
         self.config["write_mode"] = ["sqlite", "markdown"]
         const.MODE = self.mode_var.get()  # 同步模块级变量，确保 weibo.py 使用正确模式
