@@ -53,10 +53,10 @@ DTFORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
 def _split_keywords(keyword_str):
-    """按逗号/分号拆分多关键词列表，去空白去重。空输入返回空列表。"""
+    """按常见分隔符（逗号/顿号/分号/空格）拆分多关键词列表，去空白去重。空输入返回空列表。"""
     if not keyword_str or not keyword_str.strip():
         return []
-    parts = re.split(r'[,，;]', keyword_str)
+    parts = re.split(r'[,，;；\s、]+', keyword_str)
     seen = set()
     result = []
     for p in parts:

@@ -3,7 +3,7 @@
 
 import copy, json, logging, logging.config, os, sys, threading, time, queue, re, sqlite3
 from pathlib import Path
-from tkinter import Tk, Toplevel, Frame, LabelFrame, Label, Button, Entry, Text, Scrollbar, messagebox, StringVar, IntVar, BooleanVar, filedialog, DISABLED, NORMAL, END, RIGHT, Y, BOTH, LEFT, X, TOP, BOTTOM, WORD, ttk, Spinbox, Checkbutton
+from tkinter import Tk, Toplevel, Frame, LabelFrame, Label, Button, Entry, Text, Scrollbar, messagebox, StringVar, IntVar, BooleanVar, Listbox, filedialog, DISABLED, NORMAL, END, RIGHT, Y, BOTH, LEFT, X, TOP, BOTTOM, WORD, ttk, Spinbox, Checkbutton
 
 SCRIPT_DIR = os.path.split(os.path.realpath(__file__))[0]
 if SCRIPT_DIR not in sys.path:
@@ -16,6 +16,7 @@ if _src_dir not in sys.path:
 
 import const
 from weibo import Weibo, get_config as get_weibo_config, handle_config_renaming
+from keyword_manager import keyword_mgr
 
 NL = chr(10)
 
@@ -297,9 +298,11 @@ class WeiboCrawlerGUI:
         self.root = root; self.root.title("微博爬虫 v2.0 - GUI")
         self.root.state("zoomed"); self.root.minsize(800, 600)
         self.controller = CrawlerController(); self.config = self.controller.config
+        self._prev_state = "idle"
         self._create_target_panel(); self._create_config_panel()
         self._create_log_panel(); self._create_status_bar()
         self.poll_interval = 500; self._poll_log_queue(); self._load_crawl_status()
+        self._refresh_keyword_ui()  # 初始化关键词分组/最近使用下拉框
 
     def _create_target_panel(self):
         frame = LabelFrame(self.root, text="抓取目标", padx=8, pady=4)
@@ -411,8 +414,32 @@ class WeiboCrawlerGUI:
         self.kw_var = StringVar(value=kw_filter.get("keyword", ""))
         self.kw_entry = Entry(r3, textvariable=self.kw_var, width=14, font=("", 9))
         self.kw_entry.pack(side=LEFT, padx=2)
-        ToolTip(self.kw_entry, "多关键词用逗号分隔\n如: AI, 人工智能, NLP\n正文或话题标签含任一关键词即保存")
+        ToolTip(self.kw_entry, "多关键词用逗号、顿号、空格、分号等分隔\n如: AI, 人工智能、NLP\n正文或话题标签含任一关键词即保存")
         self._toggle_keyword()
+        # ── 关键词分组管理 ──
+        r3b = Frame(self.root); r3b.pack(fill=X, padx=8, pady=1)
+        Label(r3b, text="📂 分组:", font=("", 8)).pack(side=LEFT, padx=(20, 4))
+        self._group_var = StringVar()
+        self._group_combo = ttk.Combobox(r3b, textvariable=self._group_var,
+                                         width=12, state="readonly", font=("", 8))
+        self._group_combo.pack(side=LEFT, padx=2)
+        self._group_combo.bind("<<ComboboxSelected>>", self._on_group_selected)
+        Button(r3b, text="应用分组", command=self._apply_group,
+               font=("", 8), width=8).pack(side=LEFT, padx=2)
+        Button(r3b, text="保存为分组…", command=self._save_as_group,
+               font=("", 8), width=9).pack(side=LEFT, padx=2)
+        Button(r3b, text="管理分组…", command=self._manage_groups,
+               font=("", 8), width=8).pack(side=LEFT, padx=2)
+        Button(r3b, text="导入文件…", command=self._import_keywords_file,
+               font=("", 8), width=8).pack(side=LEFT, padx=2)
+        # ── 最近使用关键词 ──
+        r3c = Frame(self.root); r3c.pack(fill=X, padx=8, pady=1)
+        Label(r3c, text="🕐 最近:", font=("", 8)).pack(side=LEFT, padx=(20, 4))
+        self._recent_var = StringVar()
+        self._recent_combo = ttk.Combobox(r3c, textvariable=self._recent_var,
+                                          width=50, state="readonly", font=("", 8))
+        self._recent_combo.pack(side=LEFT, padx=2, fill=X, expand=True)
+        self._recent_combo.bind("<<ComboboxSelected>>", self._on_recent_selected)
         self._toggle_range()
         # ── 手动链接保存 ──
         manual_frame = Frame(self.root); manual_frame.pack(fill=X, padx=8, pady=(6, 2))
@@ -447,6 +474,9 @@ class WeiboCrawlerGUI:
         b = Button(btn, text="测试(3条)", command=self._start_test, width=10); b.pack(side=LEFT, padx=4)
         ToolTip(b, "快速测试模式：仅爬取选中用户的最新 3 条\n加速运行（忽略反爬延迟）\n需要先选择目标用户")
         b = Button(btn, text="✂ 分割大MD", command=self._split_large_md_file, bg="#607D8B", fg="white", width=12); b.pack(side=LEFT, padx=4)
+        self._report_btn = Button(btn, text="📋 刷新用户列表", command=self._refresh_crawled_users_report,
+                                   bg="#607D8B", fg="white", width=13); self._report_btn.pack(side=LEFT, padx=4)
+        ToolTip(self._report_btn, "生成/刷新「已抓取用户列表.md」\n包含每个用户的基本信息和抓取统计")
         ToolTip(b, "扫描 output 目录中超过 10MB 的 Markdown 文件\n按二级标题（## ）自动分割为小文件\n分块命名：原文件名(1).md / (2).md ...")
         self.target_tree.bind("<<TreeviewSelect>>", lambda e: self._on_select_user())
 
@@ -573,6 +603,11 @@ class WeiboCrawlerGUI:
         self.config["write_mode"] = ["sqlite", "markdown"]
         const.MODE = self.mode_var.get()  # 同步模块级变量，确保 weibo.py 使用正确模式
         self.controller.save_config(self.config)
+        # 记录关键词到最近使用
+        kw = self.kw_var.get().strip()
+        if kw:
+            keyword_mgr.add_recent(kw)
+            self._refresh_keyword_ui()
 
     def _on_select_user(self):
         """选中用户时显示简要状态"""
@@ -818,6 +853,11 @@ class WeiboCrawlerGUI:
         except: pass
         # 每轮都更新按钮状态，确保线程结束（finished/stopped/error）后按钮及时恢复
         self._update_button_states()
+        # 检测状态转为 finished → 自动刷新已抓取用户列表
+        cur = self.controller.state
+        if cur == "finished" and self._prev_state != "finished":
+            self._refresh_crawled_users_report(silent=True)
+        self._prev_state = cur
         self.root.after(self.poll_interval, self._poll_log_queue)
 
     def _show_captcha_prompt(self):
@@ -856,6 +896,258 @@ class WeiboCrawlerGUI:
             else:
                 self._append_log("-- 覆盖模式，将从头抓取 --" + NL)
         except: pass
+
+    # ── 关键词分组管理 ────────────────────────────────────
+
+    def _refresh_keyword_ui(self):
+        """刷新关键词分组下拉框和最近使用下拉框"""
+        groups = keyword_mgr.group_names()
+        self._group_combo["values"] = groups if groups else ["（暂无分组）"]
+        recent = keyword_mgr.recent
+        self._recent_combo["values"] = recent if recent else ["（暂无记录）"]
+
+    def _on_group_selected(self, event=None):
+        """选中分组时预览关键词（不自动填入）"""
+        name = self._group_var.get()
+        if not name or name == "（暂无分组）":
+            return
+        g = keyword_mgr.get_group(name)
+        if g:
+            preview = ", ".join(g.keywords[:5])
+            if len(g.keywords) > 5:
+                preview += f" …(共{len(g.keywords)}个)"
+            self._append_log(f"📂 分组「{name}」: {preview}\n")
+
+    def _apply_group(self):
+        """将选中分组的全部关键词填入关键词输入框"""
+        name = self._group_var.get()
+        if not name or name == "（暂无分组）":
+            messagebox.showinfo("提示", "请先选择一个关键词分组")
+            return
+        g = keyword_mgr.get_group(name)
+        if g:
+            kw_str = ", ".join(g.keywords)
+            self.kw_var.set(kw_str)
+            self.kw_enabled_var.set(True)
+            self._toggle_keyword()
+            self._append_log(f"✅ 已应用分组「{name}」({len(g.keywords)}个关键词)\n")
+
+    def _save_as_group(self):
+        """将当前输入框的关键词保存为分组"""
+        kw_str = self.kw_var.get().strip()
+        if not kw_str:
+            messagebox.showwarning("提示", "请先在关键词输入框中输入关键词")
+            return
+        dialog = Toplevel(self.root); dialog.title("保存关键词分组")
+        dialog.geometry("380x180"); dialog.resizable(False, False)
+        dialog.transient(self.root); dialog.grab_set()
+        Label(dialog, text="分组名称:").pack(pady=(12, 2))
+        name_entry = Entry(dialog, width=40); name_entry.pack(padx=20, pady=2)
+        name_entry.focus_set()
+        Label(dialog, text="备注（可选）:", font=("", 8)).pack(pady=(8, 2))
+        note_entry = Entry(dialog, width=40); note_entry.pack(padx=20, pady=2)
+
+        def do_save():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showwarning("提示", "请输入分组名称", parent=dialog)
+                return
+            from weibo import _split_keywords
+            kws = _split_keywords(kw_str)
+            is_new = keyword_mgr.add_group(name, kws, note_entry.get().strip())
+            self._refresh_keyword_ui(); self._group_var.set(name)
+            act = "新建" if is_new else "更新（合并关键词）"
+            self._append_log(f"💾 {act}分组「{name}」({len(kws)}个关键词)\n")
+            dialog.destroy()
+
+        Button(dialog, text="保存", command=do_save).pack(pady=(12, 6))
+        dialog.bind("<Return>", lambda e: do_save())
+
+    def _manage_groups(self):
+        """管理关键词分组（查看/编辑/删除）"""
+        dialog = Toplevel(self.root); dialog.title("管理关键词分组")
+        dialog.geometry("520x420"); dialog.resizable(True, True)
+        dialog.transient(self.root); dialog.grab_set()
+        list_frame = Frame(dialog); list_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        Label(list_frame, text="已有分组（选中后可编辑/删除）:", font=("", 9)).pack(anchor="w")
+        lb = Listbox(list_frame, height=8)
+        lb.pack(fill=BOTH, expand=True, pady=4)
+        for g in keyword_mgr.groups:
+            lb.insert(END, f"{g.name}  ({len(g.keywords)}个关键词)")
+        Label(list_frame, text="关键词（任意分隔符均可）:", font=("", 9)).pack(anchor="w", pady=(8, 0))
+        kw_text = Text(list_frame, height=5); kw_text.pack(fill=BOTH, expand=True, pady=4)
+        btn_frame = Frame(list_frame); btn_frame.pack(fill=X, pady=6)
+
+        def on_select(evt=None):
+            sel = lb.curselection()
+            if sel:
+                g = keyword_mgr.groups[sel[0]]
+                kw_text.delete("1.0", END); kw_text.insert("1.0", ", ".join(g.keywords))
+        lb.bind("<<ListboxSelect>>", on_select)
+
+        def do_update():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning("提示", "请先选择一个分组", parent=dialog); return
+            g = keyword_mgr.groups[sel[0]]
+            from weibo import _split_keywords
+            new_kws = _split_keywords(kw_text.get("1.0", END))
+            keyword_mgr.update_group_keywords(g.name, new_kws)
+            self._refresh_keyword_ui()
+            self._append_log(f"✏ 已更新分组「{g.name}」({len(new_kws)}个关键词)\n")
+            messagebox.showinfo("完成", f"分组「{g.name}」已更新", parent=dialog); dialog.destroy()
+
+        def do_delete():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning("提示", "请先选择一个分组", parent=dialog); return
+            g = keyword_mgr.groups[sel[0]]
+            if messagebox.askyesno("确认删除", f"确定要删除分组「{g.name}」吗？", parent=dialog):
+                keyword_mgr.delete_group(g.name); self._refresh_keyword_ui()
+                self._append_log(f"🗑 已删除分组「{g.name}」\n"); dialog.destroy()
+
+        Button(btn_frame, text="💾 保存修改", command=do_update).pack(side=LEFT, padx=4)
+        Button(btn_frame, text="🗑 删除分组", command=do_delete).pack(side=LEFT, padx=4)
+        Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=RIGHT, padx=4)
+        if lb.size() > 0: lb.selection_set(0); on_select()
+
+    def _import_keywords_file(self):
+        """从文本文件导入关键词"""
+        filepath = filedialog.askopenfilename(
+            title="选择关键词文件",
+            filetypes=[("文本文件", "*.txt"), ("CSV文件", "*.csv"), ("所有文件", "*.*")]
+        )
+        if not filepath: return
+        try:
+            kws = keyword_mgr.import_from_file(filepath)
+            if not kws:
+                messagebox.showwarning("导入结果", "文件中未找到关键词"); return
+            kw_str = ", ".join(kws)
+            self.kw_var.set(kw_str); self.kw_enabled_var.set(True); self._toggle_keyword()
+            self._append_log(f"📥 已导入 {len(kws)} 个关键词: {Path(filepath).name}\n")
+        except Exception as e:
+            messagebox.showerror("导入失败", f"读取文件出错:\n{e}")
+
+    def _on_recent_selected(self, event=None):
+        """选中最近使用的关键词时填入输入框"""
+        kw = self._recent_var.get()
+        if not kw or kw == "（暂无记录）": return
+        self.kw_var.set(kw); self.kw_enabled_var.set(True); self._toggle_keyword()
+
+    # ── 已抓取用户列表 ────────────────────────────────────
+
+    def _refresh_crawled_users_report(self, silent=False):
+        """刷新「已抓取用户列表.md」"""
+        try:
+            db_path = os.path.join(SCRIPT_DIR, "weibo", "weibodata.db")
+            output_dir = self.config.get("output_directory", "output")
+            output_root = os.path.join(SCRIPT_DIR, output_dir)
+            uid_file = os.path.join(SCRIPT_DIR, "user_id_list.txt")
+
+            # 读取用户列表
+            users = {}
+            if os.path.isfile(uid_file):
+                with open(uid_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        p = line.strip().split(" ", 2)
+                        if p and p[0].isdigit():
+                            users[p[0]] = {"nickname": p[1] if len(p) > 1 else p[0]}
+
+            # 从数据库读取抓取统计
+            if os.path.isfile(db_path):
+                con = sqlite3.connect(db_path)
+                def _fetch(sql, *args):
+                    cur = con.cursor(); cur.execute(sql, args); rows = cur.fetchall(); cur.close()
+                    return rows
+                for uid in users:
+                    row = _fetch("SELECT MIN(created_at), MAX(created_at), COUNT(*) FROM weibo WHERE user_id=?", uid)
+                    if row and row[0]:
+                        users[uid]["first_crawl"] = row[0][0][:10] if row[0][0] else "-"
+                        users[uid]["last_crawl"] = row[0][1][:10] if row[0][1] else "-"
+                        users[uid]["weibo_count"] = row[0][2]
+                # 扫描输出目录中的 MD 文件数
+                for uid, info in users.items():
+                    sn = info.get("nickname", uid)
+                    safe_name = re.sub(r'[<>:"/\\|?*]', '_', sn)
+                    user_dir = os.path.join(output_root, safe_name)
+                    md_count = 0
+                    if os.path.isdir(user_dir):
+                        md_count = len([f for f in os.listdir(user_dir) if f.endswith('.md')])
+                    info["md_files"] = md_count
+                # 用户信息（从user表）
+                for uid in users:
+                    row = _fetch("SELECT follower_count, gender, location FROM user WHERE id=?", uid)
+                    if row and row[0]:
+                        users[uid]["followers"] = row[0][0] or 0
+                        users[uid]["gender"] = row[0][1] or ""
+                        users[uid]["location"] = row[0][2] or ""
+                con.close()
+
+            # 生成 MD 报告
+            lines = ["# 📋 已抓取微博用户列表", ""]
+            from datetime import datetime
+            lines.append(f"> 自动生成于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            lines.append("")
+
+            crawled = {u: i for u, i in users.items() if i.get("weibo_count", 0) > 0}
+            uncrawled = {u: i for u, i in users.items() if u not in crawled}
+            total = sum(i.get("weibo_count", 0) for i in users.values())
+            total_md = sum(i.get("md_files", 0) for i in users.values())
+
+            lines.append(f"**总用户数**: {len(users)} | **已抓取**: {len(crawled)} | "
+                        f"**累计微博**: {total} 条 | **现存 MD 文件**: {total_md} 个")
+            lines.append("")
+
+            if crawled:
+                lines.append("## ✅ 已抓取用户")
+                lines.append("")
+                lines.append("| 序号 | 昵称 | 用户ID | 首次 | 最近 | 微博数 | MD数 |")
+                lines.append("|------|------|--------|------|------|--------|------|")
+                for i, (uid, info) in enumerate(sorted(crawled.items(), key=lambda x: x[1].get("weibo_count", 0), reverse=True), 1):
+                    lines.append(f"| {i} | {info.get('nickname', uid)} | `{uid}` | "
+                               f"{info.get('first_crawl', '-')} | {info.get('last_crawl', '-')} | "
+                               f"{info.get('weibo_count', 0)} | {info.get('md_files', 0)} |")
+                lines.append("")
+
+            if uncrawled:
+                lines.append("## ⏳ 待抓取用户")
+                lines.append("")
+                lines.append("| 序号 | 昵称 | 用户ID |")
+                lines.append("|------|------|--------|")
+                for i, (uid, info) in enumerate(uncrawled.items(), 1):
+                    lines.append(f"| {i} | {info.get('nickname', uid)} | `{uid}` |")
+                lines.append("")
+
+            if crawled:
+                lines.append("---")
+                lines.append("")
+                lines.append("## 📊 抓取详情")
+                lines.append("")
+                for uid, info in sorted(crawled.items(), key=lambda x: x[1].get("weibo_count", 0), reverse=True):
+                    sn = info.get("nickname", uid)
+                    lines.append(f"### {sn} (`{uid}`)")
+                    lines.append("")
+                    lines.append(f"- **首次抓取**: {info.get('first_crawl', '-')}")
+                    lines.append(f"- **最近抓取**: {info.get('last_crawl', '-')}")
+                    lines.append(f"- **抓取微博数**: {info.get('weibo_count', 0)} 条")
+                    lines.append(f"- **现存 MD 文件**: {info.get('md_files', 0)} 个")
+                    fl = info.get("followers", 0)
+                    loc = info.get("location", "")
+                    detail = []
+                    if fl: detail.append(f"粉丝 {fl:,}")
+                    if loc: detail.append(loc)
+                    if detail: lines.append(f"- **用户信息**: {' / '.join(detail)}")
+                    lines.append(f"- **主页**: https://weibo.com/u/{uid}")
+                    lines.append("")
+
+            report_path = os.path.join(SCRIPT_DIR, "已抓取用户列表.md")
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines))
+            if not silent:
+                self._append_log(f"📋 已刷新用户列表: 已抓取用户列表.md\n")
+        except Exception as e:
+            if not silent:
+                self._append_log(f"⚠ 刷新用户列表失败: {e}\n")
 
 
 def main():
