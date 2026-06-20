@@ -577,6 +577,11 @@ class WeiboCrawlerGUI:
             self._append_log("⚠ 用户取消爬取\n")
             return
 
+        # 确认后才记录关键词到最近使用
+        if kw_enabled and kw_str:
+            keyword_mgr.add_recent(kw_str)
+            self._refresh_keyword_ui()
+
         self.log_text.delete(1.0, END)
         if self.controller.start_crawl(cb_progress=self._on_progress, override=override):
             self._update_button_states()
@@ -692,11 +697,7 @@ class WeiboCrawlerGUI:
         self.config["write_mode"] = ["sqlite", "markdown"]
         const.MODE = self.mode_var.get()  # 同步模块级变量，确保 weibo.py 使用正确模式
         self.controller.save_config(self.config)
-        # 记录关键词到最近使用
-        kw = self.kw_var.get().strip()
-        if kw:
-            keyword_mgr.add_recent(kw)
-            self._refresh_keyword_ui()
+        # 注意：add_recent 移到 _start() 确认弹窗之后，避免用户取消爬取时仍记录
 
     def _on_select_user(self):
         """选中用户时显示简要状态"""
@@ -1355,6 +1356,12 @@ class WeiboCrawlerGUI:
             g = keyword_mgr.groups[sel[0]]
             if messagebox.askyesno("确认删除", f"确定要删除分组「{g.name}」吗？", parent=dialog):
                 keyword_mgr.delete_group(g.name); self._refresh_keyword_ui()
+                # 如果删除的是主窗口当前选中的分组，清除输入框
+                if self._group_var.get() == g.name:
+                    self._group_var.set("（暂无分组）" if not keyword_mgr.groups else keyword_mgr.groups[0].name)
+                    self.kw_var.set("")
+                    self.kw_enabled_var.set(False)
+                    self._toggle_keyword()
                 self._append_log(f"🗑 已删除分组「{g.name}」\n"); dialog.destroy()
 
         Button(btn_frame, text="📥 加载", command=load_selected).pack(side=LEFT, padx=4)
