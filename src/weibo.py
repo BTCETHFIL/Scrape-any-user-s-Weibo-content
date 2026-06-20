@@ -1139,60 +1139,6 @@ class Weibo(object):
             logger.info("完整分析结果：\n%s", json.dumps(weibo, ensure_ascii=False, indent=2))
         return self.standardize_info(weibo)
 
-    def print_user_info(self):
-        """打印用户信息"""
-        logger.info("+" * 100)
-        logger.info("用户信息")
-        logger.info("用户id：%s", self.user["id"])
-        logger.info("用户昵称：%s", self.user["screen_name"])
-        gender = "女" if self.user["gender"] == "f" else "男"
-        logger.info("性别：%s", gender)
-        logger.info("生日：%s", self.user["birthday"])
-        logger.info("所在地：%s", self.user["location"])
-        logger.info("IP属地：%s", self.user.get("ip_location", "未获取"))        
-        logger.info("教育经历：%s", self.user["education"])
-        logger.info("公司：%s", self.user["company"])
-        logger.info("阳光信用：%s", self.user["sunshine"])
-        logger.info("注册时间：%s", self.user["registration_time"])
-        logger.info("微博数：%d", self.user["statuses_count"])
-        logger.info("粉丝数：%d", self.user["followers_count"])
-        logger.info("关注数：%d", self.user["follow_count"])
-        logger.info("url：https://m.weibo.cn/profile/%s", self.user["id"])
-        if self.user.get("verified_reason"):
-            logger.info(self.user["verified_reason"])
-        logger.info(self.user["description"])
-        logger.info("+" * 100)
-
-    def print_one_weibo(self, weibo):
-        """打印一条微博"""
-        try:
-            logger.info("微博id：%d", weibo["id"])
-            logger.info("微博正文：%s", weibo["text"])
-            logger.info("原始图片url：%s", weibo["pics"])
-            logger.info("微博位置：%s", weibo["location"])
-            logger.info("发布时间：%s", weibo["created_at"])
-            logger.info("发布工具：%s", weibo["source"])
-            logger.info("点赞数：%d", weibo["attitudes_count"])
-            logger.info("评论数：%d", weibo["comments_count"])
-            logger.info("转发数：%d", weibo["reposts_count"])
-            logger.info("话题：%s", weibo["topics"])
-            logger.info("@用户：%s", weibo["at_users"])
-            logger.info("已编辑，编辑次数：%d" % weibo.get("edit_count", 0) if weibo.get("edited") else "未编辑")            
-            logger.info("url：https://m.weibo.cn/detail/%d", weibo["id"])
-        except OSError:
-            pass
-
-    def print_weibo(self, weibo):
-        """打印微博，若为转发微博，会同时打印原创和转发部分"""
-        if weibo.get("retweet"):
-            logger.info("*" * 100)
-            logger.info("转发部分：")
-            self.print_one_weibo(weibo["retweet"])
-            logger.info("*" * 100)
-            logger.info("原创部分：")
-        self.print_one_weibo(weibo)
-        logger.info("-" * 120)
-
     def get_one_weibo(self, info):
         """获取一条微博的全部信息"""
         try:
