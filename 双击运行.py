@@ -381,7 +381,7 @@ class WeiboCrawlerGUI:
             users_info.append({"user_id": v[0], "nickname": v[1]})
         out = os.path.join(SCRIPT_DIR, "user_id_list.txt")
         with open(out, 'w', encoding='utf-8') as f: f.write(txt)
-        self.config["user_id_list"] = out
+        self.config["user_id_list"] = "user_id_list.txt"
         self.controller.save_config(self.config)
         # 记录最近用户组合
         if users_info and not silent:
