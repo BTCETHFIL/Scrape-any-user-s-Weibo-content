@@ -83,6 +83,7 @@ class CrawlerController:
         self.state = "idle"; self.progress = 0; self.total = 0
         self.captcha_waiting = False  # 是否正在等待验证码
         self.config = None; self.load_config()
+        self._stop_resume_config = None  # 断点续传: 停止时保存的config，用于恢复
 
     def load_config(self): self.config = get_weibo_config(); return self.config
 
@@ -97,6 +98,7 @@ class CrawlerController:
         self.stop_event.clear(); self.pause_event.set()
         self.captcha_event.clear(); self.captcha_waiting = False
         self.state = "running"; self.progress = 0; self.total = 0
+        self._stop_resume_config = None  # 新任务开始，清除旧断点
         self.thread = threading.Thread(target=self._crawl_worker, args=(cb_progress, override), daemon=True)
         self.thread.start(); return True
 
@@ -167,6 +169,19 @@ class CrawlerController:
             if self.stop_event.is_set() and self.weibo:
                 try: self.weibo.write_data(0)
                 except: pass
+                # ── 保存断点续传状态 ──
+                if self.weibo and self.weibo.user_config_list:
+                    uc_list = self.weibo.user_config_list
+                    # self.progress 是最后被处理的用户索引（0-based）
+                    # 如果当前用户部分完成，从当前用户开始（DB去重会自动跳过已爬部分）
+                    remaining_index = max(0, self.progress)
+                    if remaining_index < len(uc_list):
+                        remaining = uc_list[remaining_index:]
+                        resume_cfg = (self.config or {}).copy()
+                        resume_cfg["user_id_list"] = [
+                            str(uc.get("user_id", "")) for uc in remaining
+                        ]
+                        self._stop_resume_config = resume_cfg
             if self.weibo:
                 self._final_health_report(self.weibo)
             os.chdir(_cwd)
@@ -615,7 +630,17 @@ class WeiboCrawlerGUI:
             self._append_log(traceback.format_exc())
 
     def _pause(self): self.controller.pause_crawl(); self._update_button_states()
-    def _resume(self): self.controller.resume_crawl(); self._update_button_states()
+    def _resume(self):
+        if self.controller.state == "paused":
+            self.controller.resume_crawl()
+        elif self.controller.state == "stopped" and self.controller._stop_resume_config:
+            # 断点续传：从停止位置继续
+            resume_cfg = self.controller._stop_resume_config
+            remaining = len(resume_cfg.get("user_id_list", []))
+            self.log_text.delete(1.0, END)
+            self.controller.start_crawl(cb_progress=self._on_progress, override=resume_cfg)
+            self._append_log(f"🔄 断点续传: 剩余 {remaining} 人\n")
+        self._update_button_states()
     def _stop(self):
         if self.controller.state in ("running","paused"):
             if messagebox.askyesno("确认", "确定停止吗？"):
@@ -639,7 +664,14 @@ class WeiboCrawlerGUI:
         s = self.controller.state
         self.start_btn.config(state=NORMAL if s in ("idle","finished","stopped","error") else DISABLED)
         self.pause_btn.config(state=NORMAL if s == "running" else DISABLED)
-        self.resume_btn.config(state=NORMAL if s == "paused" else DISABLED)
+        # 继续按钮：paused 时可用，或 stopped 且有断点状态时可用
+        can_resume = (s == "paused") or (s == "stopped" and self.controller._stop_resume_config)
+        self.resume_btn.config(state=NORMAL if can_resume else DISABLED)
+        if s == "stopped" and self.controller._stop_resume_config:
+            remaining = len(self.controller._stop_resume_config.get("user_id_list", []))
+            self.resume_btn.config(text=f"继续({remaining}人)")
+        else:
+            self.resume_btn.config(text="继续")
         self.stop_btn.config(state=NORMAL if s in ("running","paused") else DISABLED)
 
     def _mask_cookie(self):
