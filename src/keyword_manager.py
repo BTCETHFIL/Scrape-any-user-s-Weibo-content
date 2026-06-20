@@ -87,17 +87,21 @@ class KeywordManager:
                 return g
         return None
 
-    def add_group(self, name: str, keywords: list, note: str = "") -> bool:
+    def add_group(self, name: str, keywords: list, note: str = "", replace: bool = False) -> bool:
         """
-        添加分组。同名则更新关键词（合并去重）。
+        添加分组。同名则更新关键词。
+        默认合并去重；replace=True 则完全替换。
         返回 True=新增, False=更新
         """
         from datetime import date
         existing = self.get_group(name)
         if existing:
-            # 更新：合并关键词
-            combined = list(dict.fromkeys(existing.keywords + keywords))
-            existing.keywords = combined
+            # 更新：合并或替换
+            if replace:
+                existing.keywords = list(dict.fromkeys(keywords))
+            else:
+                combined = list(dict.fromkeys(existing.keywords + keywords))
+                existing.keywords = combined
             if note:
                 existing.note = note
             self._save()

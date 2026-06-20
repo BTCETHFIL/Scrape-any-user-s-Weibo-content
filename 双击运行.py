@@ -3,7 +3,7 @@
 
 import copy, json, logging, logging.config, os, sys, threading, time, queue, re, sqlite3
 from pathlib import Path
-from tkinter import Tk, Toplevel, Frame, LabelFrame, Label, Button, Entry, Text, Scrollbar, messagebox, StringVar, IntVar, BooleanVar, Listbox, filedialog, DISABLED, NORMAL, END, RIGHT, Y, BOTH, LEFT, X, TOP, BOTTOM, WORD, ttk, Spinbox, Checkbutton
+from tkinter import Tk, Toplevel, Frame, LabelFrame, Label, Button, Entry, Text, Scrollbar, messagebox, StringVar, IntVar, BooleanVar, Listbox, filedialog, DISABLED, NORMAL, END, RIGHT, Y, BOTH, LEFT, X, TOP, BOTTOM, WORD, ttk, Spinbox, Checkbutton, EXTENDED, W
 
 SCRIPT_DIR = os.path.split(os.path.realpath(__file__))[0]
 if SCRIPT_DIR not in sys.path:
@@ -17,6 +17,7 @@ if _src_dir not in sys.path:
 import const
 from weibo import Weibo, get_config as get_weibo_config, handle_config_renaming
 from keyword_manager import keyword_mgr
+from user_manager import user_mgr
 
 NL = chr(10)
 
@@ -299,16 +300,23 @@ class WeiboCrawlerGUI:
         self.root.state("zoomed"); self.root.minsize(800, 600)
         self.controller = CrawlerController(); self.config = self.controller.config
         self._prev_state = "idle"
-        self._create_target_panel(); self._create_config_panel()
+        self._create_target_panel(); self._create_user_group_ui(); self._create_config_panel()
         self._create_log_panel(); self._create_status_bar()
         self.poll_interval = 500; self._poll_log_queue(); self._load_crawl_status()
         self._refresh_keyword_ui()  # 初始化关键词分组/最近使用下拉框
+        self._refresh_user_group_ui()  # 初始化用户分组下拉框
 
     def _create_target_panel(self):
         frame = LabelFrame(self.root, text="抓取目标", padx=8, pady=4)
         frame.pack(fill=BOTH, padx=8, pady=4, expand=False)
-        self.target_tree = ttk.Treeview(frame, columns=("uid","昵称","日期"), show="headings", height=5)
-        for c in ("uid","昵称","日期"): self.target_tree.heading(c, text=c); self.target_tree.column(c, width=120)
+        self.target_tree = ttk.Treeview(frame, columns=("uid","昵称","日期"),
+                                        show="headings", height=6, selectmode=EXTENDED)
+        self.target_tree.heading("uid", text="用户ID")
+        self.target_tree.heading("昵称", text="昵称")
+        self.target_tree.heading("日期", text="爬取日期")
+        self.target_tree.column("uid", width=140, anchor=W, minwidth=80)
+        self.target_tree.column("昵称", width=120, anchor=W, minwidth=60)
+        self.target_tree.column("日期", width=120, anchor=W, minwidth=80)
         self.target_tree.pack(side=LEFT, fill=BOTH, expand=True)
         sb = Scrollbar(frame, command=self.target_tree.yview)
         sb.pack(side=RIGHT, fill=Y); self.target_tree.configure(yscrollcommand=sb.set)
@@ -333,7 +341,7 @@ class WeiboCrawlerGUI:
 
     def _add_target(self):
         dlg = Toplevel(self.root); dlg.title("添加用户"); dlg.geometry("300x150")
-        dlg.transient(self.root); dlg.grab_set()
+        dlg.transient(self.root); dlg.focus_set()
         Label(dlg, text="用户ID:").pack(pady=(12,2))
         uid_var = StringVar(); Entry(dlg, textvariable=uid_var, width=25).pack()
         Label(dlg, text="昵称:").pack(pady=(8,2))
@@ -351,15 +359,49 @@ class WeiboCrawlerGUI:
         self._save_targets(silent=True)
 
     def _save_targets(self, silent=False):
-        txt = ""
+        txt = ""; users_info = []
         for item in self.target_tree.get_children():
             v = self.target_tree.item(item, "values")
             txt += "{} {}\n".format(v[0], v[1])
+            users_info.append({"user_id": v[0], "nickname": v[1]})
         out = os.path.join(SCRIPT_DIR, "user_id_list.txt")
         with open(out, 'w', encoding='utf-8') as f: f.write(txt)
         self.config["user_id_list"] = out
         self.controller.save_config(self.config)
+        # 记录最近用户组合
+        if users_info and not silent:
+            display = ", ".join(u["nickname"] or u["user_id"] for u in users_info[:10])
+            if len(users_info) > 10: display += f" …共{len(users_info)}人"
+            user_mgr.add_recent(display)
+            self._refresh_user_group_ui()
         if not silent: messagebox.showinfo("提示", "已保存到 {}".format(out))
+
+    def _create_user_group_ui(self):
+        """创建用户分组管理 UI（分组下拉框 + 按钮）"""
+        ug_frame = Frame(self.root); ug_frame.pack(fill=X, padx=8, pady=1)
+        Label(ug_frame, text="👥 用户分组:", font=("", 8)).pack(side=LEFT, padx=(0, 4))
+        self._user_group_var = StringVar()
+        self._user_group_combo = ttk.Combobox(ug_frame, textvariable=self._user_group_var,
+                                              width=14, state="readonly", font=("", 8))
+        self._user_group_combo.pack(side=LEFT, padx=2)
+        self._user_group_combo.bind("<<ComboboxSelected>>", self._on_user_group_selected)
+        ToolTip(self._user_group_combo, "选择预设的用户组，可一键批量选中")
+        Button(ug_frame, text="应用分组", command=self._apply_user_group,
+               font=("", 8), width=8).pack(side=LEFT, padx=2)
+        Button(ug_frame, text="保存为分组…", command=self._save_as_user_group,
+               font=("", 8), width=9).pack(side=LEFT, padx=2)
+        Button(ug_frame, text="管理分组…", command=self._manage_user_groups,
+               font=("", 8), width=8).pack(side=LEFT, padx=2)
+        Button(ug_frame, text="导入文件…", command=self._import_users_file,
+               font=("", 8), width=8).pack(side=LEFT, padx=2)
+        # 最近使用用户组合
+        Label(ug_frame, text="🕐", font=("", 8)).pack(side=RIGHT, padx=(4, 0))
+        self._user_recent_var = StringVar()
+        self._user_recent_combo = ttk.Combobox(ug_frame, textvariable=self._user_recent_var,
+                                               width=26, state="readonly", font=("", 8))
+        self._user_recent_combo.pack(side=RIGHT, padx=2)
+        self._user_recent_combo.bind("<<ComboboxSelected>>", self._on_recent_users_selected)
+        ToolTip(self._user_recent_combo, "最近使用过的用户组合\n点击即可快速恢复之前抓取过的用户列表")
 
     def _create_config_panel(self):
         frame = LabelFrame(self.root, text="抓取配置", padx=8, pady=4)
@@ -367,10 +409,14 @@ class WeiboCrawlerGUI:
         r1 = Frame(frame); r1.pack(fill=X, pady=2)
         Label(r1, text="模式:").pack(side=LEFT, padx=(0,2))
         self.mode_var = StringVar(value=const.MODE)
-        ttk.Combobox(r1, textvariable=self.mode_var, values=["append","overwrite"], state="readonly", width=10).pack(side=LEFT, padx=2)
+        b = ttk.Combobox(r1, textvariable=self.mode_var, values=["append","overwrite"], state="readonly", width=10)
+        b.pack(side=LEFT, padx=2)
+        ToolTip(b, "append = 追加模式，从上次中断处继续\noverwrite = 覆盖模式，从头重新抓取")
         Label(r1, text="每页:").pack(side=LEFT, padx=(12,2))
         self.ppc_var = IntVar(value=self.config.get("page_weibo_count", 10))
-        Spinbox(r1, from_=1, to=50, textvariable=self.ppc_var, width=5).pack(side=LEFT, padx=2)
+        b = Spinbox(r1, from_=1, to=50, textvariable=self.ppc_var, width=5)
+        b.pack(side=LEFT, padx=2)
+        ToolTip(b, "每页抓取的微博条数\n范围 1-50 条\n建议设 10-20 条以免页面加载过慢")
         Label(r1, text="Cookie:").pack(side=LEFT, padx=(12,2))
         self.cookie_var = StringVar(value=self.config.get("cookie", ""))
         self.cookie_label = Label(r1, text=self._mask_cookie(), font=("", 9),
@@ -382,28 +428,45 @@ class WeiboCrawlerGUI:
         ToolTip(self.cookie_label, "点击这里或「编辑」按钮\n粘贴浏览器 Cookie 字符串（登录微博后从开发者工具复制）")
         r2 = Frame(frame); r2.pack(fill=X, pady=2)
         self.orig_only_var = BooleanVar(value=bool(self.config.get("only_crawl_original", 0)))
-        Checkbutton(r2, text="仅原创", variable=self.orig_only_var).pack(side=LEFT, padx=4)
+        cb = Checkbutton(r2, text="仅原创", variable=self.orig_only_var)
+        cb.pack(side=LEFT, padx=4)
+        ToolTip(cb, "仅抓取原创微博\n不抓取转发内容")
         self.pic_dl_var = BooleanVar(value=bool(self.config.get("original_pic_download", 1)))
-        Checkbutton(r2, text="图片", variable=self.pic_dl_var).pack(side=LEFT, padx=4)
+        cb = Checkbutton(r2, text="图片", variable=self.pic_dl_var)
+        cb.pack(side=LEFT, padx=4)
+        ToolTip(cb, "下载微博中的图片到本地\n保存为 base64 嵌入 Markdown")
         self.video_dl_var = BooleanVar(value=bool(self.config.get("original_video_download", 1)))
-        Checkbutton(r2, text="视频", variable=self.video_dl_var).pack(side=LEFT, padx=4)
+        cb = Checkbutton(r2, text="视频", variable=self.video_dl_var)
+        cb.pack(side=LEFT, padx=4)
+        ToolTip(cb, "下载微博中的视频链接\n注：视频文件较大，可能影响爬取速度")
         self.comment_dl_var = BooleanVar(value=bool(self.config.get("download_comment", 1)))
-        Checkbutton(r2, text="评论", variable=self.comment_dl_var).pack(side=LEFT, padx=4)
+        cb = Checkbutton(r2, text="评论", variable=self.comment_dl_var)
+        cb.pack(side=LEFT, padx=4)
+        ToolTip(cb, "抓取微博的热门评论\n保存到 Markdown 中")
         self.repost_dl_var = BooleanVar(value=bool(self.config.get("download_repost", 1)))
-        Checkbutton(r2, text="转发", variable=self.repost_dl_var).pack(side=LEFT, padx=4)
+        cb = Checkbutton(r2, text="转发", variable=self.repost_dl_var)
+        cb.pack(side=LEFT, padx=4)
+        ToolTip(cb, "抓取微博的转发数据\n跨页抓取全部转发内容")
         ab = self.config.get("anti_ban_config", {})
         self.anti_ban_var = BooleanVar(value=ab.get("enabled", True) if isinstance(ab, dict) else True)
-        Checkbutton(r2, text="防封禁", variable=self.anti_ban_var).pack(side=LEFT, padx=4)
+        cb = Checkbutton(r2, text="防封禁", variable=self.anti_ban_var)
+        cb.pack(side=LEFT, padx=4)
+        ToolTip(cb, "启用随机延迟和反爬策略\n降低被封禁风险\n建议始终开启")
         r3 = Frame(frame); r3.pack(fill=X, pady=2)
         Label(r3, text="时间:").pack(side=LEFT, padx=(0,2))
         self.sd_var = StringVar(value=self.config.get("since_date") or "2024-12-20")
-        Entry(r3, textvariable=self.sd_var, width=10, font=("", 9)).pack(side=LEFT, padx=2)
+        b = Entry(r3, textvariable=self.sd_var, width=10, font=("", 9))
+        b.pack(side=LEFT, padx=2)
+        ToolTip(b, "起始日期（包含当天）\n格式: YYYY-MM-DD\n如 2024-12-20")
         Label(r3, text="至").pack(side=LEFT, padx=2)
         self.ed_var = StringVar(value=self.config.get("end_date") or "")
-        Entry(r3, textvariable=self.ed_var, width=10, font=("", 9)).pack(side=LEFT, padx=2)
+        b = Entry(r3, textvariable=self.ed_var, width=10, font=("", 9))
+        b.pack(side=LEFT, padx=2)
+        ToolTip(b, "结束日期（包含当天）\n格式: YYYY-MM-DD\n留空 = 不限结束日期\n如 2025-06-20")
         self.all_range_var = BooleanVar(value=False)
         cb = Checkbutton(r3, text="全时段", variable=self.all_range_var, command=self._toggle_range)
         cb.pack(side=LEFT, padx=8)
+        ToolTip(cb, "不限制日期范围\n从最早微博开始抓取")
         # 关键词过滤
         kw_filter = self.config.get("keyword_filter", {})
         if not isinstance(kw_filter, dict):
@@ -411,10 +474,12 @@ class WeiboCrawlerGUI:
         self.kw_enabled_var = BooleanVar(value=kw_filter.get("enabled", False))
         cb_kw = Checkbutton(r3, text="🔍 关键词:", variable=self.kw_enabled_var, command=self._toggle_keyword)
         cb_kw.pack(side=LEFT, padx=(20, 2))
+        ToolTip(cb_kw, "开启/关闭关键词过滤\n关闭时爬取全部微博，开启时仅保存命中关键词的微博")
         self.kw_var = StringVar(value=kw_filter.get("keyword", ""))
         self.kw_entry = Entry(r3, textvariable=self.kw_var, width=14, font=("", 9))
         self.kw_entry.pack(side=LEFT, padx=2)
-        ToolTip(self.kw_entry, "多关键词用逗号、顿号、空格、分号等分隔\n如: AI, 人工智能、NLP\n正文或话题标签含任一关键词即保存")
+        self.kw_entry.bind("<Return>", self._on_keyword_enter)
+        ToolTip(self.kw_entry, "多关键词用逗号、顿号、空格、分号等分隔\n如: AI, 人工智能、NLP\n正文或话题标签含任一关键词即保存\n回车确认并记录到最近使用")
         self._toggle_keyword()
         # ── 关键词分组管理 ──
         r3b = Frame(self.root); r3b.pack(fill=X, padx=8, pady=1)
@@ -424,6 +489,7 @@ class WeiboCrawlerGUI:
                                          width=12, state="readonly", font=("", 8))
         self._group_combo.pack(side=LEFT, padx=2)
         self._group_combo.bind("<<ComboboxSelected>>", self._on_group_selected)
+        ToolTip(self._group_combo, "选择预设的关键词组，可一键填入\n先在下方管理分组中创建关键词组")
         Button(r3b, text="应用分组", command=self._apply_group,
                font=("", 8), width=8).pack(side=LEFT, padx=2)
         Button(r3b, text="保存为分组…", command=self._save_as_group,
@@ -440,6 +506,7 @@ class WeiboCrawlerGUI:
                                           width=50, state="readonly", font=("", 8))
         self._recent_combo.pack(side=LEFT, padx=2, fill=X, expand=True)
         self._recent_combo.bind("<<ComboboxSelected>>", self._on_recent_selected)
+        ToolTip(self._recent_combo, "最近使用过的关键词\n点击即可快速填入输入框")
         self._toggle_range()
         # ── 手动链接保存 ──
         manual_frame = Frame(self.root); manual_frame.pack(fill=X, padx=8, pady=(6, 2))
@@ -450,6 +517,7 @@ class WeiboCrawlerGUI:
         self._manual_text.bind('<FocusIn>', self._on_manual_focus_in)
         self._manual_text.bind('<FocusOut>', self._on_manual_focus_out)
         self._manual_text.pack(fill=X, pady=(2, 0))
+        ToolTip(self._manual_text, "粘贴微博链接，每行一条\n支持 weibo.com / m.weibo.cn\n上限 100 条，超出可用导入文件分批处理")
         btn_row2 = Frame(manual_frame); btn_row2.pack(fill=X, pady=(4, 0))
         self._manual_btn = Button(btn_row2, text="📝 批量保存为 MD", command=self._save_manual_weibos,
                                    bg="#607D8B", fg="white", width=16)
@@ -457,6 +525,7 @@ class WeiboCrawlerGUI:
         self._import_btn = Button(btn_row2, text="📂 导入文件", command=self._import_link_file,
                                    bg="#607D8B", fg="white", width=12)
         self._import_btn.pack(side=RIGHT)
+        ToolTip(self._import_btn, "从 .txt/.csv 文件导入微博链接\n自动提取链接并去重\n超 100 条自动分批显示")
         ToolTip(self._manual_btn, "将上方粘贴的微博链接逐条抓取\n保存为 Markdown 文件\n支持 weibo.com / m.weibo.cn 链接\n最多同时处理 100 条")
         btn = Frame(self.root); btn.pack(fill=X, padx=8, pady=2)
         self.start_btn = Button(btn, text="开始抓取", command=self._start, bg="#4CAF50", fg="white", width=12)
@@ -474,9 +543,6 @@ class WeiboCrawlerGUI:
         b = Button(btn, text="测试(3条)", command=self._start_test, width=10); b.pack(side=LEFT, padx=4)
         ToolTip(b, "快速测试模式：仅爬取选中用户的最新 3 条\n加速运行（忽略反爬延迟）\n需要先选择目标用户")
         b = Button(btn, text="✂ 分割大MD", command=self._split_large_md_file, bg="#607D8B", fg="white", width=12); b.pack(side=LEFT, padx=4)
-        self._report_btn = Button(btn, text="📋 刷新用户列表", command=self._refresh_crawled_users_report,
-                                   bg="#607D8B", fg="white", width=13); self._report_btn.pack(side=LEFT, padx=4)
-        ToolTip(self._report_btn, "生成/刷新「已抓取用户列表.md」\n包含每个用户的基本信息和抓取统计")
         ToolTip(b, "扫描 output 目录中超过 10MB 的 Markdown 文件\n按二级标题（## ）自动分割为小文件\n分块命名：原文件名(1).md / (2).md ...")
         self.target_tree.bind("<<TreeviewSelect>>", lambda e: self._on_select_user())
 
@@ -556,7 +622,7 @@ class WeiboCrawlerGUI:
 
     def _edit_cookie(self):
         dlg = Toplevel(self.root); dlg.title("编辑 Cookie"); dlg.geometry("600x200")
-        dlg.transient(self.root); dlg.grab_set()
+        dlg.transient(self.root); dlg.focus_set()
         Label(dlg, text="粘贴完整的 Cookie 字符串:").pack(pady=(12,4))
         ev = StringVar(value=self.cookie_var.get())
         Entry(dlg, textvariable=ev, width=70, font=("", 9)).pack(padx=12, fill=X)
@@ -831,7 +897,7 @@ class WeiboCrawlerGUI:
     def _create_log_panel(self):
         frame = LabelFrame(self.root, text="运行日志", padx=8, pady=4)
         frame.pack(fill=BOTH, expand=True, padx=8, pady=4)
-        self.log_text = Text(frame, wrap="word", height=10, state=DISABLED, font=("Consolas", 9))
+        self.log_text = Text(frame, wrap="word", height=6, state=DISABLED, font=("Consolas", 9))
         self.log_text.pack(side=LEFT, fill=BOTH, expand=True)
         Scrollbar(frame, command=self.log_text.yview).pack(side=RIGHT, fill=Y)
 
@@ -897,6 +963,245 @@ class WeiboCrawlerGUI:
                 self._append_log("-- 覆盖模式，将从头抓取 --" + NL)
         except: pass
 
+    # ── 用户分组管理 ────────────────────────────────────
+
+    def _refresh_user_group_ui(self):
+        """刷新用户分组下拉框和最近使用下拉框"""
+        groups = user_mgr.group_names()
+        self._user_group_combo["values"] = groups if groups else ["（暂无分组）"]
+        recent = user_mgr.recent
+        self._user_recent_combo["values"] = recent if recent else ["（暂无记录）"]
+
+    def _on_user_group_selected(self, event=None):
+        """选中用户分组时预览用户列表（不自动应用）"""
+        name = self._user_group_var.get()
+        if not name or name == "（暂无分组）":
+            return
+        g = user_mgr.get_group(name)
+        if g:
+            nicks = [u.get("nickname", u.get("user_id", "?")) for u in g.users[:5]]
+            preview = ", ".join(nicks)
+            if len(g.users) > 5:
+                preview += f" …(共{len(g.users)}人)"
+            self._append_log(f"👥 用户分组「{name}」: {preview}\n")
+
+    def _apply_user_group(self):
+        """将选中分组的用户列表替换当前抓取目标（支持合并）"""
+        name = self._user_group_var.get()
+        if not name or name == "（暂无分组）":
+            messagebox.showinfo("提示", "请先选择一个用户分组")
+            return
+        g = user_mgr.get_group(name)
+        if not g or not g.users:
+            messagebox.showinfo("提示", f"分组「{name}」为空")
+            return
+        # 询问是替换还是合并
+        existing = self.target_tree.get_children()
+        if existing:
+            choice = messagebox.askyesnocancel(
+                "应用用户分组",
+                f"将分组「{name}」({len(g.users)}人)应用到目标列表：\n\n"
+                f"「是」= 替换当前列表\n"
+                f"「否」= 合并到当前列表\n"
+                f"「取消」= 不操作"
+            )
+            if choice is None:  # 取消
+                return
+            if not choice:  # 合并（否）
+                # 获取现有 user_id 集合用于去重
+                existing_ids = set()
+                for item in existing:
+                    v = self.target_tree.item(item, "values")
+                    existing_ids.add(v[0])
+                added = 0
+                for u in g.users:
+                    if u.get("user_id", "") not in existing_ids:
+                        existing_ids.add(u.get("user_id", ""))
+                        self.target_tree.insert("", END,
+                            values=(u.get("user_id", ""), u.get("nickname", ""), ""))
+                        added += 1
+                self._save_targets(silent=True)
+                self._append_log(f"👥 合并分组「{name}」: 新增 {added} 人 (现有 {len(existing_ids)} 人)\n")
+                return
+            # else: 替换（是），继续下面逻辑
+
+        # 替换模式
+        self.target_tree.delete(*self.target_tree.get_children())
+        for u in g.users:
+            self.target_tree.insert("", END,
+                values=(u.get("user_id", ""), u.get("nickname", ""), ""))
+        self._save_targets(silent=True)
+        # 记录到最近使用
+        display = f"{name}: " + ", ".join(
+            u.get("nickname", u.get("user_id", "?")) for u in g.users[:10])
+        if len(g.users) > 10:
+            display += f" …共{len(g.users)}人"
+        user_mgr.add_recent(display)
+        self._refresh_user_group_ui()
+        self._append_log(f"👥 已应用用户分组「{name}」({len(g.users)}人)\n")
+
+    def _save_as_user_group(self):
+        """将当前抓取目标列表保存为用户分组"""
+        items = self.target_tree.get_children()
+        if not items:
+            messagebox.showwarning("提示", "目标列表为空，请先添加用户")
+            return
+        users = []
+        for item in items:
+            v = self.target_tree.item(item, "values")
+            users.append({"user_id": v[0], "nickname": v[1]})
+
+        dialog = Toplevel(self.root); dialog.title("保存用户分组")
+        dialog.geometry("380x180"); dialog.resizable(False, False)
+        dialog.transient(self.root); dialog.focus_set()
+        Label(dialog, text="分组名称:").pack(pady=(12, 2))
+        name_entry = Entry(dialog, width=40); name_entry.pack(padx=20, pady=2)
+        name_entry.focus_set()
+        Label(dialog, text="备注（可选）:", font=("", 8)).pack(pady=(8, 2))
+        note_entry = Entry(dialog, width=40); note_entry.pack(padx=20, pady=2)
+
+        def do_save():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showwarning("提示", "请输入分组名称", parent=dialog)
+                return
+            is_new = user_mgr.add_group(name, users, note_entry.get().strip())
+            self._refresh_user_group_ui()
+            self._user_group_var.set(name)
+            act = "新建" if is_new else "更新（合并用户）"
+            self._append_log(f"💾 {act}用户分组「{name}」({len(users)}人)\n")
+            dialog.destroy()
+
+        Button(dialog, text="保存", command=do_save).pack(pady=(12, 6))
+        dialog.bind("<Return>", lambda e: do_save())
+
+    def _manage_user_groups(self):
+        """管理用户分组（查看/编辑/删除）"""
+        dialog = Toplevel(self.root); dialog.title("管理用户分组")
+        dialog.geometry("580x460"); dialog.resizable(True, True)
+        dialog.transient(self.root); dialog.focus_set()
+        list_frame = Frame(dialog); list_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        Label(list_frame, text="已有分组（选中后可编辑/删除）:", font=("", 9)).pack(anchor="w")
+        lb = Listbox(list_frame, height=8)
+        lb.pack(fill=BOTH, expand=True, pady=4)
+        for g in user_mgr.groups:
+            lb.insert(END, f"{g.name}  ({len(g.users)}人)")
+        Label(list_frame, text="用户列表（每行: user_id nickname）:", font=("", 9)).pack(anchor="w", pady=(8, 0))
+        user_text = Text(list_frame, height=8); user_text.pack(fill=BOTH, expand=True, pady=4)
+        btn_frame = Frame(list_frame); btn_frame.pack(fill=X, pady=6)
+
+        def on_select(evt=None):
+            sel = lb.curselection()
+            if sel:
+                g = user_mgr.groups[sel[0]]
+                user_text.delete("1.0", END)
+                lines = [f"{u.get('user_id', '')} {u.get('nickname', '')}" for u in g.users]
+                user_text.insert("1.0", "\n".join(lines))
+        lb.bind("<<ListboxSelect>>", on_select)
+
+        def do_update():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning("提示", "请先选择一个分组", parent=dialog); return
+            g = user_mgr.groups[sel[0]]
+            raw = user_text.get("1.0", END).strip()
+            # 解析用户文本（每行 user_id nickname）
+            new_users = []; seen = set()
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"): continue
+                parts = line.split(None, 1)
+                if parts:
+                    uid = parts[0]
+                    if uid in seen: continue
+                    seen.add(uid)
+                    nickname = parts[1].strip() if len(parts) > 1 else uid
+                    new_users.append({"user_id": uid, "nickname": nickname})
+            user_mgr.update_group_users(g.name, new_users)
+            self._refresh_user_group_ui()
+            self._append_log(f"✏ 已更新用户分组「{g.name}」({len(new_users)}人)\n")
+            messagebox.showinfo("完成", f"分組「{g.name}」已更新", parent=dialog); dialog.destroy()
+
+        def do_delete():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning("提示", "请先选择一个分组", parent=dialog); return
+            g = user_mgr.groups[sel[0]]
+            if messagebox.askyesno("确认删除", f"确定要删除用户分组「{g.name}」吗？", parent=dialog):
+                user_mgr.delete_group(g.name); self._refresh_user_group_ui()
+                self._append_log(f"🗑 已删除用户分组「{g.name}」\n"); dialog.destroy()
+
+        Button(btn_frame, text="💾 保存修改", command=do_update).pack(side=LEFT, padx=4)
+        Button(btn_frame, text="🗑 删除分组", command=do_delete).pack(side=LEFT, padx=4)
+        Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=RIGHT, padx=4)
+        if lb.size() > 0: lb.selection_set(0); on_select()
+
+    def _import_users_file(self):
+        """从文本文件导入用户列表"""
+        filepath = filedialog.askopenfilename(
+            title="选择用户列表文件",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+        )
+        if not filepath: return
+        try:
+            users = user_mgr.import_from_file(filepath)
+            if not users:
+                messagebox.showwarning("导入结果", "文件中未找到有效用户"); return
+            # 询问替换或合并
+            existing = self.target_tree.get_children()
+            if existing:
+                choice = messagebox.askyesnocancel(
+                    "导入用户",
+                    f"从 {Path(filepath).name} 导入了 {len(users)} 个用户：\n\n"
+                    f"「是」= 替换当前列表\n"
+                    f"「否」= 合并到当前列表\n"
+                    f"「取消」= 不操作"
+                )
+                if choice is None: return
+                if choice is False:  # 合并
+                    existing_ids = set()
+                    for item in existing:
+                        v = self.target_tree.item(item, "values"); existing_ids.add(v[0])
+                    added = 0
+                    for u in users:
+                        if u.get("user_id", "") not in existing_ids:
+                            existing_ids.add(u.get("user_id", ""))
+                            self.target_tree.insert("", END,
+                                values=(u.get("user_id", ""), u.get("nickname", ""), ""))
+                            added += 1
+                    self._save_targets(silent=True)
+                    self._append_log(f"📥 导入合并 {Path(filepath).name}: 新增 {added} 人\n")
+                    return
+                # else: 替换
+
+            # 替换模式
+            self.target_tree.delete(*self.target_tree.get_children())
+            for u in users:
+                self.target_tree.insert("", END,
+                    values=(u.get("user_id", ""), u.get("nickname", ""), ""))
+            self._save_targets(silent=True)
+            self._append_log(f"📥 已导入 {len(users)} 个用户: {Path(filepath).name}\n")
+        except Exception as e:
+            messagebox.showerror("导入失败", f"读取文件出错:\n{e}")
+
+    def _on_recent_users_selected(self, event=None):
+        """选中最近使用的用户分组时应用"""
+        val = self._user_recent_var.get()
+        if not val or val == "（暂无记录）": return
+        # 提取分组名（格式: "分组名: user1, user2, ..."）
+        if ": " in val:
+            group_name = val.split(": ", 1)[0]
+            g = user_mgr.get_group(group_name)
+            if g and g.users:
+                # 替换当前列表
+                self.target_tree.delete(*self.target_tree.get_children())
+                for u in g.users:
+                    self.target_tree.insert("", END,
+                        values=(u.get("user_id", ""), u.get("nickname", ""), ""))
+                self._save_targets(silent=True)
+                self._user_group_var.set(group_name)
+                self._append_log(f"🕐 已恢复用户分组「{group_name}」({len(g.users)}人)\n")
+
     # ── 关键词分组管理 ────────────────────────────────────
 
     def _refresh_keyword_ui(self):
@@ -905,6 +1210,14 @@ class WeiboCrawlerGUI:
         self._group_combo["values"] = groups if groups else ["（暂无分组）"]
         recent = keyword_mgr.recent
         self._recent_combo["values"] = recent if recent else ["（暂无记录）"]
+
+    def _on_keyword_enter(self, event=None):
+        """关键词输入框回车：确认关键词并记录到最近使用"""
+        kw = self.kw_var.get().strip()
+        if kw:
+            keyword_mgr.add_recent(kw)
+            self._refresh_keyword_ui()
+            self._append_log(f"🔍 关键词已确认: {kw}\n")
 
     def _on_group_selected(self, event=None):
         """选中分组时预览关键词（不自动填入）"""
@@ -933,16 +1246,21 @@ class WeiboCrawlerGUI:
             self._append_log(f"✅ 已应用分组「{name}」({len(g.keywords)}个关键词)\n")
 
     def _save_as_group(self):
-        """将当前输入框的关键词保存为分组"""
+        """将当前输入框的关键词保存为分组（若选中已有分组则预填名称，保存时替换而非合并）"""
         kw_str = self.kw_var.get().strip()
         if not kw_str:
             messagebox.showwarning("提示", "请先在关键词输入框中输入关键词")
             return
         dialog = Toplevel(self.root); dialog.title("保存关键词分组")
         dialog.geometry("380x180"); dialog.resizable(False, False)
-        dialog.transient(self.root); dialog.grab_set()
+        dialog.transient(self.root); dialog.focus_set()
         Label(dialog, text="分组名称:").pack(pady=(12, 2))
         name_entry = Entry(dialog, width=40); name_entry.pack(padx=20, pady=2)
+        # 预填当前选中的分组名（如果有）
+        current_name = self._group_var.get()
+        if current_name and current_name != "（暂无分组）":
+            name_entry.insert(0, current_name)
+            name_entry.selection_range(0, END)
         name_entry.focus_set()
         Label(dialog, text="备注（可选）:", font=("", 8)).pack(pady=(8, 2))
         note_entry = Entry(dialog, width=40); note_entry.pack(padx=20, pady=2)
@@ -954,9 +1272,9 @@ class WeiboCrawlerGUI:
                 return
             from weibo import _split_keywords
             kws = _split_keywords(kw_str)
-            is_new = keyword_mgr.add_group(name, kws, note_entry.get().strip())
+            is_new = keyword_mgr.add_group(name, kws, note_entry.get().strip(), replace=True)
             self._refresh_keyword_ui(); self._group_var.set(name)
-            act = "新建" if is_new else "更新（合并关键词）"
+            act = "新建" if is_new else "更新（已替换）"
             self._append_log(f"💾 {act}分组「{name}」({len(kws)}个关键词)\n")
             dialog.destroy()
 
@@ -967,10 +1285,10 @@ class WeiboCrawlerGUI:
         """管理关键词分组（查看/编辑/删除）"""
         dialog = Toplevel(self.root); dialog.title("管理关键词分组")
         dialog.geometry("520x420"); dialog.resizable(True, True)
-        dialog.transient(self.root); dialog.grab_set()
+        dialog.transient(self.root); dialog.focus_set()
         list_frame = Frame(dialog); list_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
-        Label(list_frame, text="已有分组（选中后可编辑/删除）:", font=("", 9)).pack(anchor="w")
-        lb = Listbox(list_frame, height=8)
+        Label(list_frame, text="已有分组（选中目标→粘贴关键词→保存）:", font=("", 9)).pack(anchor="w")
+        lb = Listbox(list_frame, height=8, exportselection=False)
         lb.pack(fill=BOTH, expand=True, pady=4)
         for g in keyword_mgr.groups:
             lb.insert(END, f"{g.name}  ({len(g.keywords)}个关键词)")
@@ -978,12 +1296,16 @@ class WeiboCrawlerGUI:
         kw_text = Text(list_frame, height=5); kw_text.pack(fill=BOTH, expand=True, pady=4)
         btn_frame = Frame(list_frame); btn_frame.pack(fill=X, pady=6)
 
-        def on_select(evt=None):
+        def load_selected():
+            """将选中分组的关键词加载到编辑区"""
             sel = lb.curselection()
             if sel:
                 g = keyword_mgr.groups[sel[0]]
                 kw_text.delete("1.0", END); kw_text.insert("1.0", ", ".join(g.keywords))
-        lb.bind("<<ListboxSelect>>", on_select)
+            else:
+                messagebox.showwarning("提示", "请先在列表中选中一个分组", parent=dialog)
+
+        # 显式"📥 加载"按钮才载入旧关键词，选择分组不会覆盖编辑区
 
         def do_update():
             sel = lb.curselection()
@@ -1006,10 +1328,11 @@ class WeiboCrawlerGUI:
                 keyword_mgr.delete_group(g.name); self._refresh_keyword_ui()
                 self._append_log(f"🗑 已删除分组「{g.name}」\n"); dialog.destroy()
 
+        Button(btn_frame, text="📥 加载", command=load_selected).pack(side=LEFT, padx=4)
         Button(btn_frame, text="💾 保存修改", command=do_update).pack(side=LEFT, padx=4)
         Button(btn_frame, text="🗑 删除分组", command=do_delete).pack(side=LEFT, padx=4)
         Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=RIGHT, padx=4)
-        if lb.size() > 0: lb.selection_set(0); on_select()
+        if lb.size() > 0: lb.selection_set(0)  # 初始高亮第一个，不填编辑区
 
     def _import_keywords_file(self):
         """从文本文件导入关键词"""
