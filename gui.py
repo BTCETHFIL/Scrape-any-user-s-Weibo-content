@@ -411,6 +411,7 @@ class WeiboCrawlerGUI:
         self.kw_var = StringVar(value=kw_filter.get("keyword", ""))
         self.kw_entry = Entry(r3, textvariable=self.kw_var, width=14, font=("", 9))
         self.kw_entry.pack(side=LEFT, padx=2)
+        ToolTip(self.kw_entry, "多关键词用逗号分隔\n如: AI, 人工智能, NLP\n正文或话题标签含任一关键词即保存")
         self._toggle_keyword()
         self._toggle_range()
         # ── 手动链接保存 ──

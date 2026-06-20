@@ -51,12 +51,36 @@ logger = logging.getLogger("weibo")
 # 日期时间格式
 DTFORMAT = "%Y-%m-%dT%H:%M:%S"
 
+
+def _split_keywords(keyword_str):
+    """按逗号/分号拆分多关键词列表，去空白去重。空输入返回空列表。"""
+    if not keyword_str or not keyword_str.strip():
+        return []
+    parts = re.split(r'[,，;]', keyword_str)
+    seen = set()
+    result = []
+    for p in parts:
+        kw = p.strip()
+        if kw and kw not in seen:
+            seen.add(kw)
+            result.append(kw)
+    return result
+
+
+def _any_keyword_matches(text, keywords):
+    """不区分大小写检查文本是否匹配任一关键词。keywords 为空时返回 True（全部通过）。"""
+    if not keywords:
+        return True
+    text_lower = text.lower()
+    return any(kw.lower() in text_lower for kw in keywords)
+
+
 class Weibo(object):
     def __init__(self, config):
         """Weibo类初始化"""
         self.validate_config(config)
         self.only_crawl_original = config["only_crawl_original"]  # 取值范围为0、1,程序默认值为0,代表要爬取用户的全部微博,1代表只爬取用户的原创微博
-        # 关键词过滤配置
+        # 关键词过滤配置（多关键词 OR 关系）
         kw_filter = config.get("keyword_filter", {})
         if isinstance(kw_filter, dict):
             self.keyword_filter_enabled = kw_filter.get("enabled", False)
@@ -64,6 +88,7 @@ class Weibo(object):
         else:
             self.keyword_filter_enabled = False
             self.keyword = ""
+        self.keywords_list = _split_keywords(self.keyword) if self.keyword_filter_enabled else []
         self.remove_html_tag = config[
             "remove_html_tag"
         ]  # 取值范围为0、1, 0代表不移除微博中的html tag, 1代表移除
@@ -1267,13 +1292,13 @@ class Weibo(object):
                                     return True
                             else:
                                 logger.debug(f"[日期通过] 微博ID={wb['id']}, 发布时间={created_at}, 起始时间={since_date}")
-                            # 关键词过滤（日期通过后，加入结果前）
-                            if self.keyword_filter_enabled and self.keyword:
-                                kw = self.keyword.lower()
+                            # 关键词过滤（日期通过后，加入结果前，多关键词 OR 关系）
+                            if self.keyword_filter_enabled and self.keywords_list:
                                 text_lower = wb.get('text', '').lower()
                                 topics_lower = wb.get('topics', '').lower()
-                                if kw not in text_lower and kw not in topics_lower:
-                                    logger.debug(f"[关键词过滤] 微博ID={wb['id']}, 不含关键词「{self.keyword}」, 已跳过")
+                                if not (_any_keyword_matches(wb.get('text', ''), self.keywords_list) or
+                                        _any_keyword_matches(wb.get('topics', ''), self.keywords_list)):
+                                    logger.debug(f"[关键词过滤] 微博ID={wb['id']}, 不含任一关键词, 已跳过")
                                     continue
                             if (not self.only_crawl_original) or ("retweet" not in wb.keys()):
                                 self.weibo.append(wb)
@@ -1769,14 +1794,13 @@ class Weibo(object):
                 self.user_config = old_user_config
                 self.user = old_user
 
-            # 关键词过滤（手动链接）
-            if self.keyword_filter_enabled and self.keyword:
-                kw = self.keyword.lower()
-                text_lower = weibo.get('text', '').lower()
-                topics_lower = weibo.get('topics', '').lower()
-                if kw not in text_lower and kw not in topics_lower:
+            # 关键词过滤（手动链接，多关键词 OR 关系）
+            if self.keyword_filter_enabled and self.keywords_list:
+                if not (_any_keyword_matches(weibo.get('text', ''), self.keywords_list) or
+                        _any_keyword_matches(weibo.get('topics', ''), self.keywords_list)):
+                    kw_display = ' / '.join(self.keywords_list)
                     return {'success': False, 'md_path': '',
-                            'error': f'微博内容不含关键词「{self.keyword}」'}
+                            'error': f'微博内容不含任一关键词「{kw_display}」'}
 
             # ── 构建 MD 内容 ──
             created_at = weibo.get('created_at', '')
@@ -1927,8 +1951,9 @@ class Weibo(object):
             if self.get_user_info() != 0:
                 return
             logger.info("准备搜集 {} 的微博".format(self.user["screen_name"]))
-            if self.keyword_filter_enabled and self.keyword:
-                logger.info(f"🔍 关键词过滤已启用: 「{self.keyword}」（匹配正文或话题标签）")
+            if self.keyword_filter_enabled and self.keywords_list:
+                kw_display = ' / '.join(self.keywords_list)
+                logger.info(f"🔍 关键词过滤已启用: {len(self.keywords_list)}个 / 「{kw_display}」（正文或话题标签任一命中即保存）")
 
             # 防封禁：初始化爬取统计
             if self.anti_ban_enabled:
