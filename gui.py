@@ -191,7 +191,8 @@ class CrawlerController:
     def _update_index(self, wb, force=False):
         sn = (wb.user or {}).get("screen_name", "")
         if not sn: return
-        ud = os.path.join(SCRIPT_DIR, "weibo_data", sn)
+        od = self.config.get("output_directory", "output") if self.config else "output"
+        ud = os.path.join(SCRIPT_DIR, od, sn)
         os.makedirs(ud, exist_ok=True)
         db = os.path.join(SCRIPT_DIR, "weibo", "weibodata.db")
         if not os.path.exists(db): return
@@ -445,7 +446,7 @@ class WeiboCrawlerGUI:
         b = Button(btn, text="测试(3条)", command=self._start_test, width=10); b.pack(side=LEFT, padx=4)
         ToolTip(b, "快速测试模式：仅爬取选中用户的最新 3 条\n加速运行（忽略反爬延迟）\n需要先选择目标用户")
         b = Button(btn, text="✂ 分割大MD", command=self._split_large_md_file, bg="#607D8B", fg="white", width=12); b.pack(side=LEFT, padx=4)
-        ToolTip(b, "扫描 weibo_data 目录中超过 10MB 的 Markdown 文件\n按二级标题（## ）自动分割为小文件\n分块命名：原文件名(1).md / (2).md ...")
+        ToolTip(b, "扫描 output 目录中超过 10MB 的 Markdown 文件\n按二级标题（## ）自动分割为小文件\n分块命名：原文件名(1).md / (2).md ...")
         self.target_tree.bind("<<TreeviewSelect>>", lambda e: self._on_select_user())
 
     def _start(self):
@@ -591,8 +592,9 @@ class WeiboCrawlerGUI:
 
     def _split_large_md_file(self):
         """选择目录，扫描并分割 >10MB 的 .md 文件"""
+        od = self.config.get("output_directory", "output") if self.config else "output"
         d = filedialog.askdirectory(title="选择要扫描的 MD 文件目录",
-            initialdir=os.path.join(SCRIPT_DIR, "weibo_data"))
+            initialdir=os.path.join(SCRIPT_DIR, od))
         if not d:
             return
         big_files = []

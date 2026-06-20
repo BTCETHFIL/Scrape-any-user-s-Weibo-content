@@ -1916,8 +1916,8 @@ class Weibo(object):
             wid_short = str(weibo_id_numeric)[:8]
             md_filename = f"单条_{safe_name}_{safe_date}_{wid_short}.md"
 
-            # 输出到 weibo_data/manual/{screen_name}/ 子目录
-            file_dir = os.path.join(PROJECT_DIR, "weibo_data", "manual", safe_name)
+            # 输出到 output/{screen_name}/ 目录（与正常爬取统一）
+            file_dir = os.path.join(PROJECT_DIR, self.output_directory, safe_name)
             os.makedirs(file_dir, exist_ok=True)
             md_path = os.path.join(file_dir, md_filename)
             with open(md_path, 'w', encoding='utf-8') as f:

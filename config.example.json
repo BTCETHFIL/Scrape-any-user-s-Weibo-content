@@ -8,7 +8,7 @@
     "markdown_split_by": "week",
     "original_pic_download": 1,
     "retweet_pic_download": 0,
-    "output_directory": "weibo_data",
+    "output_directory": "output",
     "user_id_as_folder_name": 0,
     "remove_html_tag": 1,
     "cookie": "your_cookie_here",
