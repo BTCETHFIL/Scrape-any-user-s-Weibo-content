@@ -304,9 +304,17 @@ def _split_large_md(filepath, max_mb=10, log=None):
             cmb = len(chunk_text.encode('utf-8')) / (1024 * 1024)
             log(f"    → {new_path.name} ({cmb:.1f} MB)", 'info')
     fp.unlink()
+    # 🔁 递归分割：检查输出文件是否仍超限，是则再次分割（防止尾块/超大单行穿透）
+    total_parts = len(chunks)
+    for ci in range(1, len(chunks) + 1):
+        sub_path = fp.parent / f'{stem}({ci}){ext}'
+        if sub_path.exists() and sub_path.stat().st_size > max_bytes:
+            sub_ok, sub_cnt = _split_large_md(sub_path, max_mb, log)
+            if sub_ok:
+                total_parts += sub_cnt - 1  # 原文件被替换为 sub_cnt 个文件
     if log:
-        log(f"  ✂ 分割完成: {fp.name} → {len(chunks)} 个文件", 'info')
-    return True, len(chunks)
+        log(f"  ✂ 分割完成: {fp.name} → {total_parts} 个文件", 'info')
+    return True, total_parts
 
 
 class WeiboCrawlerGUI:
